@@ -6,5 +6,8 @@
 int main() {
 	//json_parse_main();
 
-	json_parse_table();
+	//json_parse_table();
+	json_parse_main();
+	
+	
 }
