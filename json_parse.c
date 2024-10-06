@@ -41,7 +41,7 @@ void json_parse_file() {
 typedef enum { STRING, OBJECT, LIST, INTEGER, DOUB } ValueType;
 
 typedef struct Value {
-	ValueType type;	//0:STR, 1:OBJ, 2:LIST, 3:INT
+	ValueType type;	//0:STR, 1:OBJ, 2:LIST, 3:INT, 4:DOUB
 	union {	//한 개만 사용되기에 union으로 메모리 낭비X
 		char stringValue[1024];			//type:0 단순 문자열 value
 		struct KeyValue* object;	//객체(리스트일경우만)
@@ -62,30 +62,7 @@ typedef struct ListValue {
 	struct ListValue* next;
 }ListValue;
 
-typedef struct Stack_Frame {
-	int capacity;
-	char* Data;
-	int top;
-	struct Stack_Frame* next_Stack_Frame;	//스택에 스택
-}Stack_Frame;
-
-Stack_Frame* json_parse_init_stack_frame(int capacity) {
-	Stack_Frame* stack = (Stack_Frame*)malloc(sizeof(Stack_Frame) * capacity);
-	memset(stack, 0, sizeof(Stack_Frame)*capacity);
-	return stack;
-}
-
-Stack_Frame* json_parse_init_stack_create() {
-	int capacity = 100;
-	Stack_Frame* stack = (Stack_Frame*)malloc(sizeof(Stack_Frame));
-	stack->capacity = capacity; 
-	stack->Data = (char*)malloc(sizeof(char) * capacity);
-	stack->top = -1;
-	stack->next_Stack_Frame = NULL;
-	return stack;
-}
-
-void json_parse_num_fun(KeyValue* key, char* json, int* idx) {
+void json_parse_num_fun(KeyValue* key, char* json, int* idx, int ck) {
 	char c = json[(*idx)];	//정수라 그냥 바로 넣어주기
 	char data[100];
 	int i = 0;
@@ -93,22 +70,38 @@ void json_parse_num_fun(KeyValue* key, char* json, int* idx) {
 	do {
 		data[i++] = c;
 		c = json[++(*idx)];
-	} while (c != "," && (c != '}' && c!=' '));
+	} while (c != ',' && c != '}' && c != ' ' && c != ']');
 	--(*idx);
 	data[i] = '\0';
 	number = strtod(data, NULL);
-	if (number == (int)number) {//정수형
-		key->value->type = 3;
-		key->value->intValue = (int)number;
+	if (ck == 0) {	//객체일경우
+		if (number == (int)number) {//정수형
+			key->value->type = 3;
+			key->value->intValue = (int)number;
+		}
+		else {//실수형
+			key->value->type = 4;
+			key->value->doubleValue = number;
+		}
 	}
-	else {//실수형
-		key->value->type = 4;
-		key->value->doubleValue = number;
+	else {
+		if (number == (int)number) {//정수형
+			key->value->list->value->type = 3;
+			key->value->list->value->intValue = (int)number;
+		}
+		else {//실수형
+			key->value->list->value->type = 4;
+			key->value->list->value->doubleValue = number;
+		}
 	}
 }
 
 void json_parse_str_fun(KeyValue* key, char* json, int* idx, int ck_key_value) {
 	char c = json[(*idx)];	//c == "
+	if (c != '"') {
+		printf("json 구문에 문법 오류가 있습니다.");
+		exit(1);
+	}
 	char data[100];
 	int i = 0;
 	do {
@@ -120,29 +113,62 @@ void json_parse_str_fun(KeyValue* key, char* json, int* idx, int ck_key_value) {
 	if (ck_key_value == 1) {//키값 문자열 넣기
 		strcpy_s(key->keyValue, sizeof(char) * 100, data);
 	}
-	else if(ck_key_value==0){//밸류값 문자열 넣기
-		
+	else if(ck_key_value==0){//밸류값 문자열 넣기		
 		strcpy_s(key->value->stringValue, sizeof(char) * 100, data);
+	}else if(ck_key_value=2){//밸류값 리스트
+		strcpy_s(key->value->list->value->stringValue, sizeof(char) * 100, data);
 	}
 }
 
-void json_parse_obj_make_fun(Stack_Frame* stack, Value* table, KeyValue* key, char* json, int* idx) {	//{객체생성 스택
-	//객체 생성
-	stack->next_Stack_Frame = json_parse_init_stack_create();	//객체 스택 생성
-	table->type = 1;	//obj타입
-	table->object = key;
+void json_parse_obj_make_fun(Value* table, KeyValue* key, char* json, int* idx);
+
+void json_parse_list_fun(KeyValue* key, char* json, int* idx) {
+	char c = json[++(*idx)];	//리스트 시작 문자
+	while (c == ' ' || c == '\n') c = json[++(*idx)];
+	key->value->type = 2;		//2:list
+	key->value->list = (ListValue*)malloc(sizeof(ListValue));
+	key->value->list->value = (Value*)malloc(sizeof(Value));
+	while (c != ']') {
+		while (c == ' ' || c == '\n') c = json[++(*idx)];
+		if (c == '"') {
+			key->value->list->value->type = 0; //0:str
+			json_parse_str_fun(key, json, idx, 2);
+		}
+		else if (c == '{') {
+			key->value->list->value->object = (KeyValue*)malloc(sizeof(KeyValue));
+			json_parse_obj_make_fun(key->value->list->value, key->value->list->value->object, json, idx);
+		}
+		else {	//정수 혹은 실수인경우
+			json_parse_num_fun(key, json, idx,2);
+		}
+		c = json[++(*idx)];
+		while (c == ' ' || c == '\n') c = json[++(*idx)];
+		if (c == ',') {	//다음 리스트 생성
+			key->value->list->next = (ListValue*)malloc(sizeof(ListValue));
+			key->value->list = key->value->list->next;
+			key->value->list->value = (Value*)malloc(sizeof(Value));
+			c = json[++(*idx)];
+		}
+	}
+}
+
+void json_parse_obj_make_fun(Value* table, KeyValue* key, char* json, int* idx) {	//{객체생성 스택
+	if (table != NULL) {
+		table->type = 1;	//obj타입
+		table->object = key;
+	}
 
 	char c = json[++(*idx)];
 	while (c != '}') {
-		while (c == ' ') c = json[++(*idx)];
+		while (c == ' ' || c == '\n') c = json[++(*idx)];
 		//키값 삽입
 		json_parse_str_fun(key, json, idx, 1);	//키값 문자열 넣기 함수
 		c = json[++(*idx)];
-		while (c == ' ') c = json[++(*idx)];
+		while (c == ' ' || c == '\n') c = json[++(*idx)];
 		//밸류값 삽입
 		if (c == ':') {
 			c = json[++(*idx)];
-			while (c == ' ') c = json[++(*idx)];
+			while (c == ' ' || c == '\n') c = json[++(*idx)];
 			key->value = (Value*)malloc(sizeof(Value));
 			//3가지 경우의수 str,int,list
 			if (c == '"') {	//문자 밸류
@@ -150,15 +176,16 @@ void json_parse_obj_make_fun(Stack_Frame* stack, Value* table, KeyValue* key, ch
 				json_parse_str_fun(key, json, idx, 0);	//밸류값 문자열 넣기 함수
 			}
 			else if (c == '[') {//리스트 값 의미
-
+				//리스트의 경우 obj, str, char, int, double 다 섞일 수 있음
+				json_parse_list_fun(key, json, idx);
 			}
 			else {	//int or double 의미
-				json_parse_num_fun(key, json, idx);
+				json_parse_num_fun(key, json, idx,0);
 			}
 		}
 		c = json[++(*idx)];
-		while (c == ' ') c = json[++(*idx)];
-		if (c == ',') {//객체에 키:값이 여러개가 되는거임
+		while (c == ' ' || c == '\n') c = json[++(*idx)];
+		if (c == ',') { //객체에 키:값 한 쌍이 여러개가 되는거임
 			++(*idx);
 			key->next = (KeyValue*)malloc(sizeof(KeyValue));
 			key = key->next;
@@ -168,11 +195,19 @@ void json_parse_obj_make_fun(Stack_Frame* stack, Value* table, KeyValue* key, ch
 }
 
 void json_parse_main() {	//메인 스택
-	char test_arr_json[1024] = { "{ \"name\":\"홍길동\", \"age\":23}" };
+	FILE* pFile = NULL;
+	char test_arr_json[1024];
+	fopen_s(&pFile, "json\\test.json", "r");
+	int i;
+	for (i = 0; i < 1024; i++) {
+		test_arr_json[i] = fgetc(pFile);
+		if (test_arr_json[i] == EOF) break;
+	}
+	test_arr_json[i] = '\0';
+	
 
 	//메인 스택프레임 생성
 	const int stack_max_count = 100;
-	Stack_Frame* main_stack = json_parse_init_stack_create();
 
 	//전역느낌의 해쉬테이블 초기화
 	Value main_table;
@@ -183,16 +218,44 @@ void json_parse_main() {	//메인 스택
 	for (idx = 0; ; idx++) {
 		c = test_arr_json[idx];
 		switch (c) {
+			case ' ':
+				break;
 			case '{':	//main()->obj()생성
 				//테이블에 객체 생성 후 키값 and 밸류값 넣기
-				json_parse_obj_make_fun(main_stack, &main_table, &main_key, test_arr_json, &idx);
+				json_parse_obj_make_fun(&main_table, &main_key, test_arr_json, &idx);
+				//종료시 test_arr_json[idx] = '}'
+				break;
+			case '"':	//문자열
+				json_parse_str_fun(&main_key, test_arr_json, &idx, 1);
+				//종료시 test_arr_json[idx] = '"'
+				break;
+			case '[':	//리스트
+				json_parse_list_fun(&main_key, test_arr_json, &idx);
+				//종료시 test_arr_json[idx] = ']'
+				break;
+			default:	//정수
+				json_parse_num_fun(&main_key, test_arr_json, &idx, 0);
+				//종료시 test_arr_json[idx] = '정수끝값 반환'
 				break;
 		}
-		break;
+		if ((c = test_arr_json[++idx]) == ',') ++idx;
+	}
+
+	while (1) {
+		switch (main_table.type) {
+			case 0:	//str
+				break;
+			case 1:	//obj
+				break;
+			case 2:	//list
+				break;
+			case 3:	//int
+				break;
+			case 4: //double
+				break;
+			default:
+				break;
+		}
 	}
 	
-	printf("%s\n", main_key.keyValue);
-	printf("%s\n", main_key.value->stringValue);
-	printf("%s\n", main_key.next->keyValue);
-	printf("%d\n", main_key.next->value->intValue);
 }
