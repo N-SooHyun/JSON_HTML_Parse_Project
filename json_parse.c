@@ -128,6 +128,9 @@ void json_parse_list_fun(KeyValue* key, char* json, int* idx) {
 	key->value->type = 2;		//2:list
 	key->value->list = (ListValue*)malloc(sizeof(ListValue));
 	key->value->list->value = (Value*)malloc(sizeof(Value));
+	ListValue* first_list = key->value->list;
+	memset(key->value->list->value, 0, sizeof(Value));
+
 	while (c != ']') {
 		while (c == ' ' || c == '\n') c = json[++(*idx)];
 		if (c == '"') {
@@ -136,7 +139,11 @@ void json_parse_list_fun(KeyValue* key, char* json, int* idx) {
 		}
 		else if (c == '{') {
 			key->value->list->value->object = (KeyValue*)malloc(sizeof(KeyValue));
+			memset(key->value->list->value->object, 0, sizeof(KeyValue));
 			json_parse_obj_make_fun(key->value->list->value, key->value->list->value->object, json, idx);
+		}
+		else if (c == '[') {
+			json_parse_list_fun(key, json, idx);
 		}
 		else {	//정수 혹은 실수인경우
 			json_parse_num_fun(key, json, idx,2);
@@ -145,31 +152,39 @@ void json_parse_list_fun(KeyValue* key, char* json, int* idx) {
 		while (c == ' ' || c == '\n') c = json[++(*idx)];
 		if (c == ',') {	//다음 리스트 생성
 			key->value->list->next = (ListValue*)malloc(sizeof(ListValue));
+			memset(key->value->list->next, 0, sizeof(ListValue));
 			key->value->list = key->value->list->next;
 			key->value->list->value = (Value*)malloc(sizeof(Value));
+			memset(key->value->list->value, 0, sizeof(Value));
 			c = json[++(*idx)];
 		}
 	}
+	key->value->list = first_list;
 }
 
-void json_parse_obj_make_fun(Value* table, KeyValue* key, char* json, int* idx) {	//{객체생성 스택
-	if (table != NULL) {
-		table->type = 1;	//obj타입
-		table->object = key;
+void json_parse_obj_make_fun(Value* value, KeyValue* key, char* json, int* idx) {	//{객체생성 스택
+	//key : value 두 개를 책임져야함
+	if (value != NULL) {
+		value->type = 1;	//obj타입
+		value->object = key;
 	}
 
-	char c = json[++(*idx)];
+	char c = json[++(*idx)];	//'{' -> after '?'
 	while (c != '}') {
 		while (c == ' ' || c == '\n') c = json[++(*idx)];
+
 		//키값 삽입
 		json_parse_str_fun(key, json, idx, 1);	//키값 문자열 넣기 함수
-		c = json[++(*idx)];
+		c = json[++(*idx)];		//'"' -> after '?'
 		while (c == ' ' || c == '\n') c = json[++(*idx)];
+
 		//밸류값 삽입
 		if (c == ':') {
-			c = json[++(*idx)];
+			c = json[++(*idx)];		//':' -> after '?'
 			while (c == ' ' || c == '\n') c = json[++(*idx)];
 			key->value = (Value*)malloc(sizeof(Value));
+			memset(key->value, 0, sizeof(Value));
+
 			//3가지 경우의수 str,int,list
 			if (c == '"') {	//문자 밸류
 				key->value->type = 0;	//0:str
@@ -186,16 +201,101 @@ void json_parse_obj_make_fun(Value* table, KeyValue* key, char* json, int* idx) 
 		c = json[++(*idx)];
 		while (c == ' ' || c == '\n') c = json[++(*idx)];
 		if (c == ',') { //객체에 키:값 한 쌍이 여러개가 되는거임
-			++(*idx);
 			key->next = (KeyValue*)malloc(sizeof(KeyValue));
+			memset(key->next, 0, sizeof(KeyValue));
 			key = key->next;
 			c = json[++(*idx)];
 		} 
 	}
 }
 
+
+
+void json_reverse_parse_str(Value* value, KeyValue* key, ListValue* list, int select) {
+	if (select == 0) {
+		printf("\"%s\" : ", key->keyValue);
+		value = key->value;
+	}
+	else if (select == 1) {//리스트 혹은 밸류값
+		printf("\"%s\"", value->stringValue);
+	}
+}
+
+void json_reverse_parse_num(Value* value, KeyValue* key, ListValue* list, int cknum) {
+	if (cknum == 0) {//int
+		printf("%d", value->intValue);
+	}
+	else if (cknum == 1) {//double
+		printf("%lf.4", value->doubleValue);
+	}
+}
+
+void json_reverse_parse_obj(Value* value, KeyValue* key, ListValue* list);
+
+void json_reverse_parse_list(Value* value, KeyValue* key, ListValue* list) {
+	//list내부에 존재하는 str, obj, int, list, double 전부 책임져야함
+	list = value->list;
+	printf("[\n");
+	while (list != NULL) {
+		switch (list->value->type) {
+		case 1:	//obj
+			value = list->value;
+			json_reverse_parse_obj(value, key, list);
+			break;
+		case 2:	//list
+			value = list->value;
+			json_reverse_parse_list(value, key, list);
+			break;
+		case 0:	//str
+			value = list->value;
+			json_reverse_parse_str(value, key, list, 1);
+			break;
+		case 3:	//int
+			json_reverse_parse_num(value, key, list, 0);
+			break;
+		case 4:	//double
+			json_reverse_parse_num(value, key, list, 1);
+			break;
+		}
+		list = list->next;
+		list != NULL ? printf(",") : printf("");
+	}
+	printf("]");
+}
+
+void json_reverse_parse_obj(Value* value, KeyValue* key, ListValue* list) {
+	printf("{");
+	key = value->object;
+	while (key != NULL) {
+		//key print
+		json_reverse_parse_str(value, key, list, 0);
+
+		//value print
+		value = key->value;
+		switch (value->type) {
+		case 0:	//str
+			json_reverse_parse_str(value, key, list, 1);
+			break;
+		case 2:	//list
+			json_reverse_parse_list(value, key, list);
+			break;
+		case 3:	//int
+			json_reverse_parse_num(value, key, list, 0);
+			break;
+		case 4:	//double
+			json_reverse_parse_num(value, key, list, 1);
+			break;
+		}
+		key = key->next;
+		key != NULL ? printf(",") : printf("");
+	}
+	printf("}");
+	value = NULL;
+}
+
 void json_parse_main() {	//메인 스택
 	FILE* pFile = NULL;
+	
 	char test_arr_json[1024];
 	fopen_s(&pFile, "json\\test.json", "r");
 	int i;
@@ -204,14 +304,16 @@ void json_parse_main() {	//메인 스택
 		if (test_arr_json[i] == EOF) break;
 	}
 	test_arr_json[i] = '\0';
-	
-
-	//메인 스택프레임 생성
-	const int stack_max_count = 100;
 
 	//전역느낌의 해쉬테이블 초기화
 	Value main_table;
 	KeyValue main_key;
+	Value* main_switch_table = NULL;
+	KeyValue* main_switch_key = NULL;
+	ListValue* main_switch_list = NULL;
+
+	memset(&main_table, 0, sizeof(Value));
+	memset(&main_key, 0, sizeof(KeyValue));
 
 	char c;
 	int idx;
@@ -233,29 +335,44 @@ void json_parse_main() {	//메인 스택
 				json_parse_list_fun(&main_key, test_arr_json, &idx);
 				//종료시 test_arr_json[idx] = ']'
 				break;
+			case '\0':	//종료
+				break;
 			default:	//정수
 				json_parse_num_fun(&main_key, test_arr_json, &idx, 0);
 				//종료시 test_arr_json[idx] = '정수끝값 반환'
 				break;
 		}
-		if ((c = test_arr_json[++idx]) == ',') ++idx;
+		while (c == ' ' || c == '\n') c = test_arr_json[++idx];
+		if (c == '\0') break;
+		if (c == ',') c=test_arr_json[++idx];
+		while (c == ' ' || c == '\n') c = test_arr_json[++idx];
 	}
-
-	while (1) {
-		switch (main_table.type) {
+	main_switch_table = &main_table;
+	json_reverse_parse_obj(main_switch_table, main_switch_key, main_switch_list);
+	
+	/*
+	while (main_switch_table != NULL) {
+		switch (main_switch_table->type) {
 			case 0:	//str
+				json_reverse_parse_str(main_switch_table, main_switch_key, main_switch_list, 1);
 				break;
 			case 1:	//obj
+				json_reverse_parse_obj(main_switch_table, main_switch_key, main_switch_list);
 				break;
 			case 2:	//list
+				json_reverse_parse_list(main_switch_table, main_switch_key, main_switch_list);
 				break;
 			case 3:	//int
+				json_reverse_parse_num(main_switch_table, main_switch_key, main_switch_list, 0);
 				break;
 			case 4: //double
+				json_reverse_parse_num(main_switch_table, main_switch_key, main_switch_list, 1);
 				break;
 			default:
 				break;
 		}
 	}
-	
+
+	*/
 }
+
